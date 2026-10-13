@@ -1,6 +1,10 @@
 node_modules/
 package-lock.json
 
-# Runtime state written by the Electron window build
+# Per-machine settings and credentials - never commit either.
+# config.local.json overrides config.json; models.json may hold API keys.
+config.local.json
+models.json
+
 window-state.json
 *.log

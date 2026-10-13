@@ -45,7 +45,19 @@ if (!declared) {
   problems.push('inject.js no longer contains the regex that reads the UI version');
 }
 
-// 3. Every source file parses.
+// 3. Files that can hold an API key or personal settings must never be tracked.
+//    models.json accepts a literal key, and config.local.json is where a user
+//    puts their own overrides - committing either leaks them to everyone.
+for (const name of ['models.json', 'config.local.json']) {
+  try {
+    execFileSync('git', ['ls-files', '--error-unmatch', name], { cwd: root, stdio: 'pipe' });
+    problems.push(`${name} is tracked by git - it may contain an API key or personal settings`);
+  } catch {
+    // Not tracked (or not a git checkout) - which is the point.
+  }
+}
+
+// 4. Every source file parses.
 const sources = ['inject.js', ...fs.readdirSync(path.join(root, 'src')).map((f) => path.join('src', f))].filter(
   (f) => f.endsWith('.js')
 );

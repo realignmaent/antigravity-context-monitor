@@ -1,0 +1,40 @@
+{
+  "_comment": [
+    "Copy to models.json and fill in. Same schema as pi's ~/.pi/agent/models.json,",
+    "so a config can be copied between the two. models.json is git-ignored.",
+    "",
+    "apiKey accepts three forms, following pi:",
+    "  \"$MY_API_KEY\"                      read from the environment (missing -> the key is unresolved)",
+    "  \"!op read 'op://vault/item/cred'\"  run a command and use its stdout",
+    "  \"sk-...\"                           a literal",
+    "",
+    "api: openai-completions | anthropic-messages | google-generative-ai",
+    "baseUrl should include the API version segment, as in pi's examples."
+  ],
+  "providers": {
+    "openai": {
+      "baseUrl": "https://api.openai.com/v1",
+      "api": "openai-completions",
+      "apiKey": "$OPENAI_API_KEY",
+      "models": [{ "id": "gpt-4o-mini" }]
+    },
+    "anthropic": {
+      "baseUrl": "https://api.anthropic.com/v1",
+      "api": "anthropic-messages",
+      "apiKey": "$ANTHROPIC_API_KEY",
+      "models": [{ "id": "claude-haiku-4-5" }]
+    },
+    "google": {
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+      "api": "google-generative-ai",
+      "apiKey": "$GEMINI_API_KEY",
+      "models": [{ "id": "gemini-2.5-flash" }]
+    },
+    "ollama": {
+      "baseUrl": "http://localhost:11434/v1",
+      "api": "openai-completions",
+      "apiKey": "ollama",
+      "models": [{ "id": "llama3.1:8b" }]
+    }
+  }
+}

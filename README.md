@@ -72,6 +72,34 @@ Once it's running, the meter sits in the composer footer, just left of the model
 
 To remove it: `node inject.js --remove`, or just reload Antigravity with <kbd>Ctrl</kbd>+<kbd>R</kbd>.
 
+## Encouragement (optional)
+
+The meter can occasionally say something encouraging. Only at pressure moments — crossing 85%, crossing 95%, just after a compaction, and the first turn of a new conversation — and each one fires at most once per conversation, so it never nags. The numbers step aside for a sentence and come back a few seconds later.
+
+Out of the box the sentences are built in. To have them written for the moment instead, copy `models.example.json` to `models.json` and fill in a provider:
+
+```bash
+cp models.example.json models.json
+```
+
+The schema is the same as [pi](https://github.com/earendil-works/pi)'s `~/.pi/agent/models.json`, so a config can be copied between the two. `apiKey` accepts a literal, `$ENV_VAR`, or `!command` — the same three forms pi supports.
+
+### What leaves your machine
+
+Only when `models.json` exists, and only these:
+
+- the token numbers (used / window / percentage, plus the per-category shares)
+- the model name
+- which moment triggered it
+
+**Messages, file contents, tool output and paths are never sent.** The conversation title is sent only if you opt in with `phrases.sendConversationTitle` — it is off by default, because it names what you are working on and this is the one field that is about the work rather than about the meter.
+
+With no `models.json`, nothing is sent anywhere and the built-in lines are used. Turn the whole thing off with `phrases.enabled: false`.
+
+### Personal settings
+
+Put machine-specific settings — your provider, your window size, your title preference — in `config.local.json` instead of editing `config.json`. It is git-ignored, merges over the defaults key by key, and so never collides with a `git pull`.
+
 ## Configuration
 
 `config.json`:

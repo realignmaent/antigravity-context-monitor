@@ -7,7 +7,7 @@
 (function () {
   // Bump when this file changes. The host checks it, so a stale build left in
   // the page by an earlier run gets replaced instead of silently kept.
-  const VERSION = 'agcm-6';
+  const VERSION = 'agcm-8';
   if (window.__agcm && window.__agcm.version === VERSION) return;
 
   const HOST_ID = 'agcm-inline-host';
@@ -32,7 +32,17 @@
       border: 1px solid #e3e6ea; border-radius: 999px;
       background: #ffffff; cursor: default;
       font-variant-numeric: tabular-nums; white-space: nowrap;
-      transition: border-color .15s, background .15s;
+      transition: border-color .15s, background .15s, opacity .15s ease;
+    }
+    /* Encouragement: the numbers step aside for a sentence, then come back.
+       The host is right-anchored, so the pill just grows leftwards. */
+    #${HOST_ID} .msg { display: none; color: #3f444b; }
+    #${HOST_ID} .chip.showing-msg .track,
+    #${HOST_ID} .chip.showing-msg .txt,
+    #${HOST_ID} .chip.showing-msg .pct { display: none; }
+    #${HOST_ID} .chip.showing-msg .msg { display: inline; }
+    @media (prefers-reduced-motion: reduce) {
+      #${HOST_ID} .chip { transition: none; }
     }
     #${HOST_ID}:hover .chip { border-color: #cfd4da; background: #fbfcfd; }
     /* The injector pushes only on change, so a beat marks "still alive". Without
@@ -85,8 +95,37 @@
   let hidden = false;
   let lastBeatAt = Date.now();
   let stale = false;
+  let msgUntil = 0;
 
   const STALE_MS = 6000;
+  const HOLD_MS = 3500;
+
+  const reducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // Swaps the pill between numbers and a sentence behind a short opacity dip, so
+  // it reads as a morph rather than a flicker. The text is written with
+  // textContent - it arrives from a model, which is untrusted input.
+  function swapTo(showing, text) {
+    if (!host) return;
+    const chip = host.querySelector('.chip');
+    const msg = host.querySelector('.msg');
+    if (!chip || !msg) return;
+
+    const apply = () => {
+      if (text !== undefined) msg.textContent = text;
+      chip.classList.toggle('showing-msg', showing);
+    };
+
+    if (reducedMotion) {
+      apply();
+      return;
+    }
+    chip.style.opacity = '0';
+    setTimeout(() => {
+      apply();
+      chip.style.opacity = '1';
+    }, 150);
+  }
 
   function touch() {
     lastBeatAt = Date.now();
@@ -102,7 +141,7 @@
     for (const stale of document.querySelectorAll('#' + HOST_ID)) stale.remove();
     host = document.createElement('div');
     host.id = HOST_ID;
-    host.innerHTML = '<div class="chip"><span class="track"><span class="fill"></span></span><span class="txt"></span><span class="pct"></span></div><div class="tip"></div>';
+    host.innerHTML = '<div class="chip"><span class="track"><span class="fill"></span></span><span class="txt"></span><span class="pct"></span><span class="msg"></span></div><div class="tip"></div>';
     const style = document.createElement('style');
     style.textContent = css;
     host.appendChild(style);
@@ -217,6 +256,28 @@
       touch();
       return true;
     },
+    // Encouragement, on its own channel: the numbers keep flowing underneath and
+    // come back when the sentence has had its few seconds.
+    say(phrase) {
+      const text = phrase && phrase.text;
+      if (!text) return false;
+      ensure();
+      touch();
+      msgUntil = Date.now() + HOLD_MS;
+      swapTo(true, String(text).slice(0, 60));
+      return true;
+    },
+    // Called by the injector on its own clock. The page cannot be trusted to time
+    // this: Chromium throttles timers in hidden pages (once a second, and once a
+    // minute after five minutes hidden), so a sentence could otherwise sit on top
+    // of the numbers far longer than intended. The 400ms interval below still
+    // checks as a backstop, for the case where the injector dies mid-sentence.
+    sayEnd() {
+      if (!msgUntil) return false;
+      msgUntil = 0;
+      swapTo(false, '');
+      return true;
+    },
     // Shown when there is no conversation to report on (e.g. the new-conversation
     // screen) — better to show nothing than another conversation's numbers.
     hide() {
@@ -231,6 +292,20 @@
       host = null;
       latest = null;
     },
+    // Diagnostics: `window.__agcm.__debug()` from DevTools. Worth keeping - the
+    // panel has several early-return guards, and without this there is no way to
+    // tell which one a silent no-op is stuck behind.
+    __debug() {
+      return {
+        version: VERSION,
+        hasPayload: !!latest,
+        hidden,
+        msgUntil,
+        stale,
+        timerActive: timer !== null,
+        hostConnected: !!(host && host.isConnected),
+      };
+    },
   };
 
   // React re-renders do not remove us (we are outside its tree), but the composer
@@ -241,6 +316,13 @@
     if (!stale && Date.now() - lastBeatAt > STALE_MS) {
       stale = true;
       if (host) host.classList.add('stale');
+    }
+
+    // The hold is checked here rather than on its own timer, so there is only
+    // ever one interval running in the page.
+    if (msgUntil && Date.now() > msgUntil) {
+      msgUntil = 0;
+      swapTo(false, '');
     }
 
     if (!document.querySelector(ANCHOR)) {

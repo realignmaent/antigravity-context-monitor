@@ -22,12 +22,17 @@ const {
   trajectoryPath,
 } = require('./src/reader');
 const { buildBreakdown } = require('./src/analyzer');
+const phrases = require('./src/phrases');
 
 // Measured: one tick is a single Runtime.evaluate of ~0.4ms, so this costs about
 // 0.1% of a core. Parsing a trajectory is skipped unless the file actually
 // changed, so the poll rate does not multiply the expensive work. Was 2000, which
 // made switching conversations feel laggy.
 const POLL_MS = Number(process.env.AGCM_POLL) || 150;
+
+// How long an encouragement stays up. Kept here rather than in the page because
+// the page's own timers are throttled while Antigravity is in the background.
+const SAY_HOLD_MS = 3500;
 const RECONNECT_MS = 3000;
 const UI_SRC = fs.readFileSync(path.join(__dirname, 'src', 'inject-ui.js'), 'utf8');
 
@@ -199,6 +204,10 @@ function payloadFor(conversationId) {
     overBy: breakdown.overBy,
     percent: breakdown.percent,
     categories: breakdown.categories,
+    // Consumed by the phrases trigger logic: a compaction is a jump in the count,
+    // and exactly one generation means the conversation just started.
+    compactionCount: breakdown.compactionCount,
+    generations: traj.samples.length,
     updatedAt: Date.now(),
   };
   return lastPayload;
@@ -262,8 +271,11 @@ async function run() {
   let absentSince = null;
   let lastPushedKey = '';
   let lastBeatAt = 0;
+  let sayTimer = null;
 
   const teardown = async () => {
+    if (sayTimer) clearTimeout(sayTimer);
+    sayTimer = null;
     if (session) session.cdp.close();
     session = null;
     uiReady = false;
@@ -338,6 +350,25 @@ async function run() {
         // "idle" apart from "the injector died and the numbers are frozen".
         lastBeatAt = Date.now();
         await session.cdp.eval('window.__agcm.beat()');
+      }
+
+      // Encouragement rides its own channel rather than the data payload: it
+      // arrives asynchronously (a provider call), and folding it into `set()`
+      // would mean re-pushing identical numbers just to carry a sentence.
+      if (payload) {
+        phrases.pick(convId, payload);
+        const phrase = phrases.take(convId);
+        if (phrase) {
+          await session.cdp.eval(`window.__agcm.say(${JSON.stringify(phrase)})`);
+          // The revert is scheduled here, not in the page: Chromium throttles
+          // timers in hidden pages, so a page-side timer can leave a sentence
+          // covering the numbers for a minute or more.
+          if (sayTimer) clearTimeout(sayTimer);
+          sayTimer = setTimeout(() => {
+            sayTimer = null;
+            session?.cdp.eval('window.__agcm.sayEnd()').catch(() => {});
+          }, SAY_HOLD_MS);
+        }
       }
     } catch (err) {
       console.error('注入中断，重试中：' + err.message);

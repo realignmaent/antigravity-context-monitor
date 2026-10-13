@@ -1,4 +1,10 @@
 {
-  "_comment": "limitOverride 覆盖从 Antigravity 数据里读到的上下文窗口；null = 用读取到的真实值（推荐）。",
-  "limitOverride": null
+  "_comment": "limitOverride 覆盖从 Antigravity 数据里读到的上下文窗口；null = 用读取到的真实值（推荐）。phraseModel 形如 \"openai/gpt-4o-mini\"，留空则用 models.json 里第一个可用模型。个人设置请写进 config.local.json（已被 gitignore），避免和仓库默认值冲突。",
+  "limitOverride": null,
+  "phraseModel": "",
+  "phrases": {
+    "enabled": true,
+    "language": "zh",
+    "sendConversationTitle": false
+  }
 }
