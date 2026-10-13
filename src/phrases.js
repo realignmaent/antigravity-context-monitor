@@ -10,21 +10,38 @@ const config = require('./config');
 // models.json, unresolvable key, timeout, empty reply - falls back to the
 // built-in lines below.
 
-const TRIGGERS = {
-  danger95: {
-    zh: '上下文很满了，收个尾吧',
-    en: 'Nearly full - time to wrap up',
-    prompt: '上下文已经超过 95%，随时可能被自动压缩',
+// Threshold stages, highest first. The user asked for 50/70/90 rather than only
+// the top of the range: a phrase this early is a rhythm marker, and it also means
+// the few seconds a reasoning model spends thinking never feels late.
+const THRESHOLDS = [
+  {
+    key: 'danger90',
+    at: 90,
+    zh: '快到上限了，收个尾吧',
+    en: 'Near the limit - start wrapping up',
+    prompt: '上下文已经超过 90%，随时可能触发自动压缩',
   },
+  {
+    key: 'warn70',
+    at: 70,
+    zh: '过半不少了，稳住节奏',
+    en: 'Well past halfway - hold the pace',
+    prompt: '上下文超过 70%，中段，还能从容地推进',
+  },
+  {
+    key: 'half50',
+    at: 50,
+    zh: '一半了，节奏不错',
+    en: 'Halfway - good rhythm',
+    prompt: '上下文刚过 50%，正是状态最好的时候',
+  },
+];
+
+const EVENTS = {
   compacted: {
     zh: '刚整理过，轻装上阵',
     en: 'Freshly compacted - clean slate',
     prompt: '上下文刚刚被自动压缩过，早期的对话细节已经被摘要替代',
-  },
-  warn85: {
-    zh: '已经用掉大半了，稳住',
-    en: 'Past three quarters - steady on',
-    prompt: '上下文刚超过 85%，开始进入紧张区间',
   },
   freshStart: {
     zh: '新会话，开始吧',
@@ -33,11 +50,53 @@ const TRIGGERS = {
   },
 };
 
-// Priority order matters when several are pending at once, e.g. the panel first
-// sees a conversation that is already at 96%.
-const ORDER = ['danger95', 'compacted', 'warn85', 'freshStart'];
+const TRIGGERS = { ...EVENTS };
+for (const stage of THRESHOLDS) TRIGGERS[stage.key] = stage;
+
+// Priority order matters when several are pending at once - e.g. the panel first
+// sees a conversation that is already at 92%. "compacted" outranks the lower
+// thresholds so a compaction is never missed in favour of a percentage.
+const ORDER = ['danger90', 'compacted', 'warn70', 'half50', 'freshStart'];
+
+// Which percentage stages a given trigger makes redundant. When 90% fires first,
+// catch-up calls for 70% and 50% would arrive seconds apart and read as nagging.
+const SUPERSEDES = {
+  danger90: ['warn70', 'half50'],
+  warn70: ['half50'],
+};
 
 const FALLBACK_LANGUAGES = { zh: 'zh', en: 'en' };
+
+// The whole persona. Everything here exists to stop a specific failure: models
+// default to cheerleader mode ("加油！你最棒！"), which is the opposite of what
+// lands well while someone is mid-task. Constraints are spelled out because a
+// small model reading them as prose will ignore them.
+const SYSTEM_PROMPTS = {
+  zh: [
+    '你是一个安静的编程搭子，坐在用户旁边看他写代码。',
+    '在上下文窗口进入新阶段时，你说一句恰到好处的话——不多不少。',
+    '',
+    '只输出这句话本身。规则：',
+    '- 12 到 20 个字。最多一个 emoji，也可以没有。',
+    '- 不要引号、不要换行、不要解释、不要称呼用户、不要复述任何数字或百分比。',
+    '- 平静、具体，像同事随口说的一句，不是系统通知。',
+    '- 不喊口号、不夸奖用户（"太厉害了""完美"一律不要）、不拍马屁。',
+    '- 语气跟着阶段走：刚到一半是肯定节奏；过半是稳住；接近上限是提醒收尾；压缩之后是重新开始。',
+    '- 如果会话主题能看出在做什么，可以让这句话和那件事沾点边，但不要复述主题、不要暴露它。',
+  ].join('\n'),
+  en: [
+    'You are a quiet pair-programmer sitting next to someone while they work.',
+    'When the context window enters a new stage you say one well-judged thing - no more.',
+    '',
+    'Output that sentence and nothing else. Rules:',
+    '- 8 to 14 words. At most one emoji, or none.',
+    '- No quotes, no line breaks, no explanation, no addressing the user, no restating numbers.',
+    '- Calm and concrete - something a colleague would say, not a system notification.',
+    '- No rallying cries, no praise ("amazing", "perfect"), no flattery.',
+    '- Match the stage: at halfway affirm the pace; past two thirds steady them; near the limit suggest wrapping up; after a compaction, a clean restart.',
+    '- If the topic hints at what they are working on, you may allude to it, but never restate or expose it.',
+  ].join('\n'),
+};
 
 function settingsOf() {
   const all = config.load();
@@ -78,12 +137,10 @@ function nextTrigger(state, payload) {
   const percent = payload.percent;
   const pending = {};
 
-  if (percent != null && percent >= 95) pending.danger95 = true;
-  if (percent != null && percent >= 85) pending.warn85 = true;
-  if (
-    state.compactionCount != null &&
-    payload.compactionCount > state.compactionCount
-  ) {
+  for (const stage of THRESHOLDS) {
+    if (percent != null && percent >= stage.at) pending[stage.key] = true;
+  }
+  if (state.compactionCount != null && payload.compactionCount > state.compactionCount) {
     pending.compacted = true;
   }
   if (payload.generations === 1) pending.freshStart = true;
@@ -130,12 +187,7 @@ async function generate(trigger, payload, settings) {
   // The only field beyond plain numbers, and opt-in - see settingsOf().
   if (settings.sendTitle && payload.title) lines.push(`会话主题：${payload.title}`);
 
-  const language = settings.language === 'en' ? 'English' : '简体中文';
-  const system = [
-    `你是一个安静的编程搭子，只在关键时刻说一句鼓励。`,
-    `只输出这一句话本身：用${language}，不超过 ${settings.language === 'en' ? 12 : 20} 个字，`,
-    `不要引号、不要换行、不要解释、不要称呼用户。最多用 1 个 emoji。`,
-  ].join('');
+  const system = SYSTEM_PROMPTS[settings.language] || SYSTEM_PROMPTS.zh;
 
   const text = await models.complete({
     model,
@@ -173,8 +225,7 @@ function pick(conversationId, payload) {
   state.generations = payload.generations;
 
   if (!trigger) return null;
-  // danger95 already says everything warn85 would; don't queue both.
-  if (trigger === 'danger95') state.seen.warn85 = true;
+  for (const redundant of SUPERSEDES[trigger] || []) state.seen[redundant] = true;
   state.seen[trigger] = true;
   state.wanted = trigger;
 

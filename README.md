@@ -74,7 +74,19 @@ To remove it: `node inject.js --remove`, or just reload Antigravity with <kbd>Ct
 
 ## Encouragement (optional)
 
-The meter can occasionally say something encouraging. Only at pressure moments — crossing 85%, crossing 95%, just after a compaction, and the first turn of a new conversation — and each one fires at most once per conversation, so it never nags. The numbers step aside for a sentence and come back a few seconds later.
+The meter can occasionally say something encouraging, in the pill itself: the numbers step aside for a sentence and come back a few seconds later.
+
+Five moments, each firing at most once per conversation, so it never nags:
+
+| when | what it is for |
+|---|---|
+| context passes **50%** | a rhythm marker — the work is going somewhere |
+| passes **70%** | steady on, still comfortable |
+| passes **90%** | start thinking about wrapping up |
+| **after a compaction** | the early detail is gone; a clean restart |
+| **first turn** of a conversation | off we go |
+
+Passing 90% marks 70% and 50% as already said, so first opening a conversation that is already at 92% does not fire three sentences in a row.
 
 Out of the box the sentences are built in. To have them written for the moment instead, copy `models.example.json` to `models.json` and fill in a provider:
 
