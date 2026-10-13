@@ -1,14 +1,22 @@
 {
   "name": "antigravity-context-monitor",
   "version": "1.0.0",
-  "private": true,
-  "description": "Floating context-window monitor for the Antigravity desktop app",
-  "main": "main.js",
+  "description": "Context-window meter embedded in the Antigravity composer, showing the real token counts its own trajectory records",
+  "license": "MIT",
+  "type": "commonjs",
   "scripts": {
-    "start": "electron .",
+    "inject": "node inject.js",
+    "remove": "node inject.js --remove",
     "check": "node src/cli.js"
   },
-  "devDependencies": {
-    "electron": "^44.7.0"
-  }
+  "engines": {
+    "node": ">=22.5"
+  },
+  "keywords": [
+    "antigravity",
+    "context-window",
+    "token-usage",
+    "electron",
+    "cdp"
+  ]
 }

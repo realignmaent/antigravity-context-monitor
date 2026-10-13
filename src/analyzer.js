@@ -53,7 +53,7 @@ const CATEGORIES = [
   { key: 'customAgents', label: 'Custom agents', color: '#e5679a' },
   { key: 'memoryFiles', label: 'Memory files', color: '#37b3c4' },
   { key: 'attachments', label: 'Attachments', color: '#c98a3a' },
-  { key: 'fixedOverhead', label: '固定开销', color: '#9aa4b2' },
+  { key: 'fixedOverhead', label: 'Fixed overhead', color: '#9aa4b2' },
 ];
 
 function findAll(haystack, needle) {

@@ -1,0 +1,117 @@
+# Antigravity Context Monitor
+
+A context-window meter that lives **inside** Antigravity's own composer — the way Claude Code shows its context panel in place, instead of as a separate window.
+
+```
+                                            ┌──────────────────────────────┐
+  Ask anything, @ to mention, / for actions │ ▬▬▬  73.4k / 256k  28.7%     │  🛡 Turbo ⌄  🎤  ➤
+                                            └──────────────────────────────┘
+```
+
+![the chip](docs/chip.png)
+
+Hover it for the full breakdown:
+
+![breakdown](docs/breakdown.png)
+
+**The numbers are measured, not guessed.** Antigravity already records the real prompt-token count and the model's window for every generation; this reads them straight out of its own database. Only the *split* between categories is estimated.
+
+- No `npm install` — zero dependencies (Node's built-in `node:sqlite` and `WebSocket`).
+- No patching of Antigravity. The panel is injected at runtime through its DevTools endpoint and disappears on reload.
+
+---
+
+## Requirements
+
+| | |
+|---|---|
+| OS | Windows 10/11 |
+| Node.js | 23.4+ (tested on Node 25). On 22.5–23.3 `node:sqlite` exists but needs `--experimental-sqlite`. |
+| Antigravity | Desktop app, running with its debug port open |
+
+Antigravity publishes its DevTools port to `%APPDATA%\Antigravity\DevToolsActivePort` on startup, so nothing needs to be configured.
+
+## Install
+
+```bash
+git clone <this repo>
+cd antigravity-context-monitor
+node inject.js
+```
+
+Leave it running; it re-attaches on its own if Antigravity restarts. To stop: `node inject.js --remove`.
+
+### Starting automatically
+
+Two options, depending on how much you want to set up:
+
+| | Script | Needs admin | How it behaves |
+|---|---|---|---|
+| **Simple** | `install-autostart.vbs` | No | Starts the meter at Windows logon. The meter notices when Antigravity isn't running and exits after 30 minutes idle. |
+| **Event-driven** | `install-event-autostart-admin.vbs` | **Yes** (UAC) | Registers permanent WMI subscriptions on `Win32_ProcessStartTrace` / `StopTrace`, so the meter starts and stops exactly with Antigravity. |
+
+Both are undone by their `uninstall-*` counterpart.
+
+> "Run when Antigravity.exe starts" is the obvious approach but needs elevation either way: `Win32_Process*Trace` subscriptions and the Security 4688 event are both admin-only, and the Task Scheduler route additionally requires enabling process-creation auditing and floods the Security log.
+
+## Configuration
+
+`config.json`:
+
+```json
+{ "limitOverride": null }
+```
+
+Set `limitOverride` to a number when you want to force the window size instead of the value read from Antigravity (the panel keeps working either way; the percentage just uses your denominator).
+
+Environment variables:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `AGCM_POLL` | `150` | Poll interval in ms |
+| `AGCM_ROOT` | `~/.gemini/antigravity` | Conversation data directory |
+| `AGCM_USER_DATA` | `%APPDATA%\Antigravity` | Where `DevToolsActivePort` lives |
+| `AGCM_CDP_PORT` | auto | Pin the DevTools port |
+| `AGCM_LIMIT` | — | Same as `limitOverride`, for one-off runs |
+| `AGCM_IDLE_EXIT_MIN` | `30` | Exit after this long without Antigravity; `0` never exits |
+
+Debugging: `npm run check` prints everything the panel sees for the active conversation.
+
+## How it works
+
+Antigravity keeps one SQLite database per conversation at `~/.gemini/antigravity/conversations/<id>.db`, holding schema-less protobuf blobs. Walking those blobs yields the real values:
+
+| What | Where |
+|---|---|
+| Conversation total (per generation) | `steps.step_payload` → `5` → `9` → `5` |
+| Model's window | `gen_metadata.data` → `1` → `9` → `10` → `4` |
+| Model name | `gen_metadata.data` → `1` → `19` |
+| The assembled prompt | `gen_metadata.data` (latest row) |
+
+The window is per model, and it is smaller than you may expect:
+
+```
+gemini-3.8-flash-*     256000
+claude-sonnet-4-6      160000
+gemini-pro-*           128000     <- the "pro" variants are smaller
+gpt-oss-120b-medium     80000
+```
+
+The **category split** is parsed out of the assembled prompt, which carries `<identity>`, `<skills>`, `<mcp_servers>`, `<subagents>`, `<user_rules>`, `<conversation_transcript>` and friends. Each section is estimated, then scaled so the parts sum to the measured total. What's left over is reported as **Fixed overhead** — it is mostly the ~29 built-in tool declarations, which Antigravity sends outside the tagged prompt text and which therefore cannot be read directly.
+
+Note that compaction does **not** fire at the window size. Observed on a real conversation: context climbed to 295k against a 256k window (~115%) before it compacted, so a reading above 100% just means "in the overshoot zone, compaction is imminent".
+
+### Injection details
+
+The panel is a `position: fixed` element appended to `<body>` — deliberately *outside* React's subtree, since adding children to the app's own nodes fights reconciliation. It sits at `z-index: 100`: above the app's normal content, below its modal backdrop (`z-[5000]`) and toasts (`z-[7000]`), so it dims with everything else when a dialog opens.
+
+## Limitations
+
+- **Windows only.** The autostart pieces are `.vbs` / PowerShell / WMI.
+- **The protobuf field paths are undocumented and reverse-engineered.** An Antigravity update can move them. Parsing is isolated in `src/pb.js` and `src/reader.js`; when a field is missing the panel degrades to showing the total rather than crashing. `npm run check` is the quickest way to see whether a new version broke something.
+- **Only the total, window and model are measured.** The per-category split is an estimate scaled to the measured total, and "Fixed overhead" is a residual — treat the proportions as indicative.
+- Console messages are in Chinese; the panel itself is English.
+
+## License
+
+MIT

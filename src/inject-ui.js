@@ -7,7 +7,7 @@
 (function () {
   // Bump when this file changes. The host checks it, so a stale build left in
   // the page by an earlier run gets replaced instead of silently kept.
-  const VERSION = 'agcm-5';
+  const VERSION = 'agcm-6';
   if (window.__agcm && window.__agcm.version === VERSION) return;
 
   const HOST_ID = 'agcm-inline-host';
@@ -151,7 +151,7 @@
     const head = document.createElement('div');
     head.className = 'tip-head';
     const titleEl = document.createElement('span');
-    titleEl.textContent = (latest.title || '上下文窗口').slice(0, 40);
+    titleEl.textContent = (latest.title || 'Context window').slice(0, 40);
     const modelEl = document.createElement('span');
     modelEl.textContent = latest.model || '';
     head.append(titleEl, modelEl);
@@ -185,7 +185,7 @@
       addRow(c.color, c.label, fmt(c.tokens), c.percent.toFixed(1) + '%', false);
     }
     if (latest.overBy > 0) {
-      addRow('#d64545', '已超出上限', '+' + fmt(latest.overBy), '等待压缩', false);
+      addRow('#d64545', 'Over limit', '+' + fmt(latest.overBy), 'awaiting compaction', false);
     } else if (latest.freeSpace != null) {
       addRow(null, 'Free space', fmt(latest.freeSpace),
         latest.limit ? (latest.freeSpace / latest.limit * 100).toFixed(1) + '%' : '', true);
