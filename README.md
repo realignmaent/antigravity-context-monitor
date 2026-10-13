@@ -1,5 +1,8 @@
 # Antigravity Context Monitor
 
+[![ci](https://github.com/realignmaent/antigravity-context-monitor/actions/workflows/ci.yml/badge.svg)](https://github.com/realignmaent/antigravity-context-monitor/actions/workflows/ci.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A context-window meter that lives **inside** Antigravity's own composer — the way Claude Code shows its context panel in place, instead of as a separate window.
 
 ```
@@ -54,6 +57,21 @@ Both are undone by their `uninstall-*` counterpart.
 
 > "Run when Antigravity.exe starts" is the obvious approach but needs elevation either way: `Win32_Process*Trace` subscriptions and the Security 4688 event are both admin-only, and the Task Scheduler route additionally requires enabling process-creation auditing and floods the Security log.
 
+## Usage
+
+Once it's running, the meter sits in the composer footer, just left of the model controls.
+
+- **The pill** shows `used / window` and a percentage, with a small bar.
+- **Colour**: blue below 85%, amber from 85%, red from 95%.
+  Red does not mean something is broken. Compaction does not fire exactly at the window size — measured at ~115% on a real conversation — so red usually means *compaction is close*, not *over the limit*.
+- **Hover** for the per-category breakdown: Messages, Skills, MCP tools, Custom agents, Memory files, System prompt, Fixed overhead, and the remaining Free space.
+- **It follows the conversation you're in.** Switching re-reads that conversation's own database, so the numbers change within a fraction of a second.
+- **It hides on the new-conversation screen**, because there is no conversation to report on — showing the previous one's numbers there would be worse than showing nothing.
+- **If the injector stops, the pill dims** rather than freezing on stale numbers and looking current.
+- **After an Antigravity restart** it re-attaches on its own within a couple of seconds; it also sits below Antigravity's modal backdrop, so it dims along with the rest of the UI when a dialog opens.
+
+To remove it: `node inject.js --remove`, or just reload Antigravity with <kbd>Ctrl</kbd>+<kbd>R</kbd>.
+
 ## Configuration
 
 `config.json`:
@@ -104,6 +122,15 @@ Note that compaction does **not** fire at the window size. Observed on a real co
 ### Injection details
 
 The panel is a `position: fixed` element appended to `<body>` — deliberately *outside* React's subtree, since adding children to the app's own nodes fights reconciliation. It sits at `z-index: 100`: above the app's normal content, below its modal backdrop (`z-[5000]`) and toasts (`z-[7000]`), so it dims with everything else when a dialog opens.
+
+## Development
+
+```bash
+npm run selfcheck   # parse every source + the encoding and build-id invariants CI also runs
+npm run check       # print everything the panel sees for the active conversation
+```
+
+`npm run check` is the first thing to reach for when a new Antigravity version breaks something: it shows which of the values it managed to read.
 
 ## Limitations
 

@@ -1,0 +1,30 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      # Parses every source, and enforces the two invariants that broke this
+      # project during development: .vbs/.ps1 encodings, and the page-side
+      # build-id contract between inject.js and inject-ui.js.
+      - run: npm run selfcheck
+
+      # The tool is Windows-only, but the reading layer must not throw when there
+      # is no Antigravity data to read.
+      - name: Degrades gracefully with no Antigravity install
+        run: |
+          AGCM_ROOT="$RUNNER_TEMP/nonexistent" node src/cli.js

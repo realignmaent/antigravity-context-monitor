@@ -7,7 +7,8 @@
   "scripts": {
     "inject": "node inject.js",
     "remove": "node inject.js --remove",
-    "check": "node src/cli.js"
+    "check": "node src/cli.js",
+    "selfcheck": "node scripts/check-invariants.js"
   },
   "engines": {
     "node": ">=22.5"

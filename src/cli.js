@@ -4,6 +4,7 @@
 // Prints what the analyzer sees so the UI layer can be trusted.
 
 const {
+  ROOT,
   findActiveConversation,
   listConversations,
   readTrajectory,
@@ -34,7 +35,7 @@ function main() {
   const conv = argId ? { conversation_id: argId, title: '(explicit)' } : findActiveConversation();
 
   if (!conv) {
-    console.log('no conversations found under ~/.gemini/antigravity');
+    console.log(`no conversations found under ${ROOT}`);
     return;
   }
 
