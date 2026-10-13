@@ -84,6 +84,8 @@ cp models.example.json models.json
 
 The schema is the same as [pi](https://github.com/earendil-works/pi)'s `~/.pi/agent/models.json`, so a config can be copied between the two. `apiKey` accepts a literal, `$ENV_VAR`, or `!command` — the same three forms pi supports.
 
+> **Using a reasoning model?** Give it headroom with `"maxTokens": 2048` on the model. Reasoning is billed against `max_tokens` before a single word of the answer is emitted, so a tight budget returns `finish_reason: "length"` with an empty reply — which looks like a broken provider rather than a budget problem. The default is already 1024 for this reason; raise it if your model thinks longer. Expect a few seconds of latency before the sentence appears.
+
 ### What leaves your machine
 
 Only when `models.json` exists, and only these:

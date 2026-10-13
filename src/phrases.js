@@ -141,8 +141,12 @@ async function generate(trigger, payload, settings) {
     model,
     system,
     prompt: lines.join('\n'),
-    maxTokens: 60,
-    timeoutMs: 4000,
+    // Generous by default: a reasoning model spends a few hundred tokens thinking
+    // before it emits a single word, and a tight budget yields an empty answer.
+    // A model that does not reason stops on its own, so the extra headroom is free.
+    // models.json can override this per model, as pi's schema allows.
+    maxTokens: model.maxTokens || 1024,
+    timeoutMs: 15000,
   });
   return sanitize(text, settings.language);
 }

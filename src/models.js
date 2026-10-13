@@ -106,6 +106,7 @@ function listModels() {
         baseUrl: model.baseUrl || spec.baseUrl,
         keySource: model.apiKey !== undefined ? model.apiKey : spec.apiKey,
         authHeader: model.authHeader !== undefined ? model.authHeader : spec.authHeader,
+        maxTokens: model.maxTokens,
         headers: { ...(spec.headers || {}), ...(model.headers || {}) },
       });
     }
@@ -217,7 +218,17 @@ async function complete({ model, system, prompt, maxTokens = 60, timeoutMs = 400
     }
     const json = await response.json();
     const text = request.extract(json);
-    if (typeof text !== 'string' || !text.trim()) throw new Error('empty completion');
+    if (typeof text !== 'string' || !text.trim()) {
+      // Reasoning models spend max_tokens on thinking before emitting anything:
+      // a budget that is too small yields finish_reason "length" and an empty
+      // content field, which looks exactly like a broken reply. Say so.
+      const finish = json?.choices?.[0]?.finish_reason;
+      throw new Error(
+        finish === 'length'
+          ? `empty completion (finish_reason "length" - max_tokens ${maxTokens} was consumed before any answer; reasoning models need a larger budget)`
+          : 'empty completion'
+      );
+    }
     return text;
   } finally {
     clearTimeout(timer);
