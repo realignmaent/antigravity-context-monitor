@@ -1,0 +1,4 @@
+{
+  "_comment": "limitOverride 覆盖从 Antigravity 数据里读到的上下文窗口；null = 用读取到的真实值（推荐）。",
+  "limitOverride": null
+}

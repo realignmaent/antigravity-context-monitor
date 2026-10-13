@@ -1,0 +1,6 @@
+node_modules/
+package-lock.json
+
+# Runtime state written by the Electron window build
+window-state.json
+*.log

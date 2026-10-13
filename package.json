@@ -1,0 +1,14 @@
+{
+  "name": "antigravity-context-monitor",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Floating context-window monitor for the Antigravity desktop app",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "check": "node src/cli.js"
+  },
+  "devDependencies": {
+    "electron": "^44.7.0"
+  }
+}
