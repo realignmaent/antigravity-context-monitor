@@ -7,8 +7,16 @@
 (function () {
   // Bump when this file changes. The host checks it, so a stale build left in
   // the page by an earlier run gets replaced instead of silently kept.
-  const VERSION = 'agcm-8';
+  const VERSION = 'agcm-10';
   if (window.__agcm && window.__agcm.version === VERSION) return;
+
+  // Generation token. Every instance of this script claims a new one, and any
+  // older instance notices on its next tick and stops touching the DOM. Without
+  // it, a copy left behind by an earlier injector keeps re-showing and
+  // re-positioning the element - which is how the pill ended up visible on the
+  // new-conversation screen, and how it could overwrite fresher numbers.
+  const INSTANCE_GEN = (window.__agcmGen || 0) + 1;
+  window.__agcmGen = INSTANCE_GEN;
 
   const HOST_ID = 'agcm-inline-host';
   const ANCHOR = '[data-testid="permissions-selector-trigger"]';
@@ -96,6 +104,10 @@
   let lastBeatAt = Date.now();
   let stale = false;
   let msgUntil = 0;
+  // Set whenever the host was just created or adopted, so the numbers get drawn
+  // into it. Without this a freshly acquired host stays an empty pill: the data
+  // flow only repaints when the numbers change, and they had not.
+  let needsPaint = false;
 
   const STALE_MS = 6000;
   const HOLD_MS = 3500;
@@ -137,8 +149,19 @@
 
   function ensure() {
     if (host && host.isConnected) return host;
-    // Drop anything a previous build left behind, so two hosts never coexist.
-    for (const stale of document.querySelectorAll('#' + HOST_ID)) stale.remove();
+
+    // An element carrying our id that is not ours means an earlier instance of
+    // this script is still alive in the page. Adopt it rather than deleting and
+    // rebuilding: deleting gave the other instance a detached node it could never
+    // see, and left this one with a brand-new, unpainted pill - an empty shell.
+    const existing = document.getElementById(HOST_ID);
+    if (existing) {
+      host = existing;
+      tip = host.querySelector('.tip');
+      needsPaint = true;
+      return host;
+    }
+
     host = document.createElement('div');
     host.id = HOST_ID;
     host.innerHTML = '<div class="chip"><span class="track"><span class="fill"></span></span><span class="txt"></span><span class="pct"></span><span class="msg"></span></div><div class="tip"></div>';
@@ -147,6 +170,7 @@
     host.appendChild(style);
     tip = host.querySelector('.tip');
     document.body.appendChild(host);
+    needsPaint = true;
     return host;
   }
 
@@ -240,7 +264,7 @@
     }
   }
 
-  window.__agcm = {
+  const api = {
     version: VERSION,
     set(payload) {
       latest = payload;
@@ -262,6 +286,12 @@
       const text = phrase && phrase.text;
       if (!text) return false;
       ensure();
+      // Draw the numbers first: they are hidden while the sentence shows, and are
+      // revealed again when it ends, so an adopted host would otherwise be empty.
+      if (needsPaint && latest) {
+        needsPaint = false;
+        if (place()) paint();
+      }
       touch();
       msgUntil = Date.now() + HOLD_MS;
       swapTo(true, String(text).slice(0, 60));
@@ -291,6 +321,9 @@
       if (host) host.remove();
       host = null;
       latest = null;
+      // Stand down completely. Leaving window.__agcm pointing at a torn-down
+      // instance is what let a second copy take over while this one kept running.
+      if (window.__agcm === api) window.__agcm = null;
     },
     // Diagnostics: `window.__agcm.__debug()` from DevTools. Worth keeping - the
     // panel has several early-return guards, and without this there is no way to
@@ -308,9 +341,17 @@
     },
   };
 
+  window.__agcm = api;
+
   // React re-renders do not remove us (we are outside its tree), but the composer
   // can be unmounted — e.g. on a page with no input box — so keep checking.
   timer = setInterval(() => {
+    if (window.__agcmGen !== INSTANCE_GEN) {
+      // Superseded by a newer instance: stand down for good.
+      clearInterval(timer);
+      timer = null;
+      return;
+    }
     if (!latest || hidden) return;
 
     if (!stale && Date.now() - lastBeatAt > STALE_MS) {
@@ -330,7 +371,11 @@
       return;
     }
     ensure();
-    place();
+    const placed = place();
+    if (needsPaint && placed) {
+      needsPaint = false;
+      paint();
+    }
   }, 400);
 
   return true;
