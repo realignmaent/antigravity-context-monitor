@@ -7,7 +7,7 @@
 (function () {
   // Bump when this file changes. The host checks it, so a stale build left in
   // the page by an earlier run gets replaced instead of silently kept.
-  const VERSION = 'agcm-10';
+  const VERSION = 'agcm-12';
   if (window.__agcm && window.__agcm.version === VERSION) return;
 
   // Generation token. Every instance of this script claims a new one, and any
@@ -29,11 +29,17 @@
          huge value here (was 2147483000) left the chip undimmed on top of the
          settings dialog's backdrop, looking like it floated outside the modal. */
       position: fixed; z-index: 100;
+      left: 0; top: 0;
       display: flex; align-items: center;
       font-family: "Segoe UI", system-ui, -apple-system, "Microsoft YaHei", sans-serif;
       font-size: 11px; line-height: 1; color: #3f444b;
       pointer-events: auto;
+      will-change: transform;
     }
+    /* Position updates come from a rAF tracker. Once the first placement has
+       settled, animate transform so panel drags and window resizes glide
+       instead of stepping at the poll interval (the reported jank). */
+    #${HOST_ID}.settled { transition: transform 140ms cubic-bezier(0.22, 0.61, 0.36, 1); }
     #${HOST_ID} .chip {
       display: flex; align-items: center; gap: 6px;
       height: 22px; padding: 0 9px 0 8px;
@@ -51,6 +57,7 @@
     #${HOST_ID} .chip.showing-msg .msg { display: inline; }
     @media (prefers-reduced-motion: reduce) {
       #${HOST_ID} .chip { transition: none; }
+      #${HOST_ID}.settled { transition: none; }
     }
     #${HOST_ID}:hover .chip { border-color: #cfd4da; background: #fbfcfd; }
     /* The injector pushes only on change, so a beat marks "still alive". Without
@@ -108,6 +115,9 @@
   // into it. Without this a freshly acquired host stays an empty pill: the data
   // flow only repaints when the numbers change, and they had not.
   let needsPaint = false;
+  // rAF tracker state (loop starts at the bottom of the file).
+  let rafId = 0;
+  let lastGeom = '';
 
   const STALE_MS = 6000;
   const HOLD_MS = 3500;
@@ -157,6 +167,10 @@
     const existing = document.getElementById(HOST_ID);
     if (existing) {
       host = existing;
+      // An adopted element may carry inline top/right from an older build whose
+      // place() used layout properties; clear them so transform alone positions.
+      host.style.top = '';
+      host.style.right = '';
       tip = host.querySelector('.tip');
       needsPaint = true;
       return host;
@@ -174,17 +188,25 @@
     return host;
   }
 
+  let settled = false;
+
   function place() {
     const anchor = document.querySelector(ANCHOR);
     if (!anchor || !host) return false;
     const r = anchor.getBoundingClientRect();
     if (!r.width) return false;
-    host.style.top = Math.round(r.top + r.height / 2) + 'px';
-    host.style.transform = 'translateY(-50%)';
-    // Right-aligned against the Turbo control, inside the free space left of it.
-    host.style.right = Math.round(window.innerWidth - r.left + GAP) + 'px';
-    host.style.left = 'auto';
+    // Transform-only positioning: the pill's right edge sits GAP px left of the
+    // Turbo control, vertically centred on it. transform moves are composited
+    // without layout, which is what makes them transitionable at all - the old
+    // top/right writes reflowed and could only ever jump.
+    const x = Math.round(r.left - GAP - host.offsetWidth);
+    const y = Math.round(r.top + r.height / 2 - host.offsetHeight / 2);
+    host.style.transform = `translate(${x}px, ${y}px)`;
     host.style.display = 'flex';
+    if (!settled) settled = true;
+    // The settled class (which enables the glide) is added by the interval, not
+    // here: rAF is suspended in hidden pages, so a deferred add here would never
+    // fire for a backgrounded window.
     return true;
   }
 
@@ -318,6 +340,8 @@
     remove() {
       if (timer) clearInterval(timer);
       timer = null;
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = 0;
       if (host) host.remove();
       host = null;
       latest = null;
@@ -336,12 +360,38 @@
         msgUntil,
         stale,
         timerActive: timer !== null,
+        rafActive: rafId !== 0,
         hostConnected: !!(host && host.isConnected),
       };
     },
   };
 
   window.__agcm = api;
+
+  // Tracks the anchor every visible frame. Position used to update only inside
+  // the 400ms interval, so resizing a panel or dragging the window edge moved
+  // the pill in visible steps - the reported jank. One getBoundingClientRect per
+  // frame is negligible next to the layout work the app is already doing, and
+  // rAF pauses entirely in hidden pages, where the 400ms interval keeps
+  // correctness instead.
+  function trackFrame() {
+    if (window.__agcmGen !== INSTANCE_GEN) { rafId = 0; return; }
+    rafId = requestAnimationFrame(trackFrame);
+    if (!latest || hidden || document.hidden) return;
+    const anchor = document.querySelector(ANCHOR);
+    if (!anchor) { if (host) host.style.display = 'none'; return; }
+    const r = anchor.getBoundingClientRect();
+    const geom = `${r.left},${r.top},${r.width},${r.height},${window.innerWidth}`;
+    if (geom === lastGeom) return;
+    lastGeom = geom;
+    ensure();
+    const placed = place();
+    if (needsPaint && placed) {
+      needsPaint = false;
+      paint();
+    }
+  }
+  rafId = requestAnimationFrame(trackFrame);
 
   // React re-renders do not remove us (we are outside its tree), but the composer
   // can be unmounted — e.g. on a page with no input box — so keep checking.
@@ -353,6 +403,10 @@
       return;
     }
     if (!latest || hidden) return;
+
+    // First placement happened -> subsequent moves may glide. Runs from the
+    // interval (throttled but alive when hidden) rather than rAF (suspended).
+    if (settled && host && !host.classList.contains('settled')) host.classList.add('settled');
 
     if (!stale && Date.now() - lastBeatAt > STALE_MS) {
       stale = true;
