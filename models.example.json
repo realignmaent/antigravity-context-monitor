@@ -9,14 +9,19 @@
     "  \"sk-...\"                           a literal",
     "",
     "api: openai-completions | anthropic-messages | google-generative-ai",
-    "baseUrl should include the API version segment, as in pi's examples."
+    "baseUrl should include the API version segment, as in pi's examples.",
+    "",
+    "maxTokens: raise for reasoning models - their thinking is billed against",
+    "this budget before any answer text appears (default 1024).",
+    "temperature: omitted by default (provider default). Only set it if your",
+    "model accepts a custom value - many reasoning models reject one."
   ],
   "providers": {
     "openai": {
       "baseUrl": "https://api.openai.com/v1",
       "api": "openai-completions",
       "apiKey": "$OPENAI_API_KEY",
-      "models": [{ "id": "gpt-4o-mini" }]
+      "models": [{ "id": "gpt-4o-mini", "temperature": 0.7 }]
     },
     "anthropic": {
       "baseUrl": "https://api.anthropic.com/v1",

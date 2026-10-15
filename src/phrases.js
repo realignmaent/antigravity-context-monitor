@@ -258,4 +258,4 @@ function reset() {
   conversations.clear();
 }
 
-module.exports = { pick, take, reset, sanitize, fallbackFor, TRIGGERS };
+module.exports = { pick, take, reset, sanitize, fallbackFor, TRIGGERS, SUPERSEDES };

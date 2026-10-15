@@ -69,6 +69,7 @@ Once it's running, the meter sits in the composer footer, just left of the model
 - **It hides on the new-conversation screen**, because there is no conversation to report on — showing the previous one's numbers there would be worse than showing nothing.
 - **If the injector stops, the pill dims** rather than freezing on stale numbers and looking current.
 - **After an Antigravity restart** it re-attaches on its own within a couple of seconds; it also sits below Antigravity's modal backdrop, so it dims along with the rest of the UI when a dialog opens.
+- **Multiple Antigravity windows each get their own session** and their own correct meter — one window's conversation never bleeds into another's numbers.
 
 To remove it: `node inject.js --remove`, or just reload Antigravity with <kbd>Ctrl</kbd>+<kbd>R</kbd>.
 
@@ -97,6 +98,8 @@ cp models.example.json models.json
 The schema is the same as [pi](https://github.com/earendil-works/pi)'s `~/.pi/agent/models.json`, so a config can be copied between the two. `apiKey` accepts a literal, `$ENV_VAR`, or `!command` — the same three forms pi supports.
 
 > **Using a reasoning model?** Give it headroom with `"maxTokens": 2048` on the model. Reasoning is billed against `max_tokens` before a single word of the answer is emitted, so a tight budget returns `finish_reason: "length"` with an empty reply — which looks like a broken provider rather than a budget problem. The default is already 1024 for this reason; raise it if your model thinks longer. Expect a few seconds of latency before the sentence appears.
+
+`temperature` is another optional per-model field. It is **omitted by default** — the provider's default applies — because many reasoning models reject a custom temperature outright. Set it only for models you know accept one.
 
 ### What leaves your machine
 
@@ -168,6 +171,8 @@ The panel is a `position: fixed` element appended to `<body>` — deliberately *
 ## Development
 
 ```bash
+npm test            # 28 unit tests over the parsing layer (protobuf paths, section
+                    # splitting, compaction detection, breakdown sum check)
 npm run selfcheck   # parse every source + the encoding and build-id invariants CI also runs
 npm run check       # print everything the panel sees for the active conversation
 ```

@@ -23,6 +23,10 @@ jobs:
       # build-id contract between inject.js and inject-ui.js.
       - run: npm run selfcheck
 
+      # Unit tests for the parsing layer: the protobuf field paths, the prompt
+      # section splitter, the compaction detector, and the breakdown sum check.
+      - run: npm test
+
       # The tool is Windows-only, but the reading layer must not throw when there
       # is no Antigravity data to read.
       - name: Degrades gracefully with no Antigravity install

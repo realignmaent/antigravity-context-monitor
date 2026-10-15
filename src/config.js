@@ -60,4 +60,4 @@ function limitOverride() {
   return Number.isFinite(value) && value > 0 ? value : null;
 }
 
-module.exports = { load, limitOverride, FILE };
+module.exports = { FILE, LOCAL_FILE, load, limitOverride, merge };

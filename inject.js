@@ -8,6 +8,10 @@
 //   node inject.js --remove   # take the meter out
 //
 // Zero dependencies: uses the built-in WebSocket and node:sqlite.
+//
+// Every open Antigravity window gets its own session and its own correct meter:
+// sessions are tracked per page, and a page that fails is torn down without
+// touching the others.
 
 const fs = require('node:fs');
 const os = require('node:os');
@@ -78,10 +82,9 @@ function discoverPort() {
   return null;
 }
 
-async function findConversationPage(port) {
-  const pages = (await httpJson(port, '/json/list')).filter((p) => p.type === 'page' && p.webSocketDebuggerUrl);
-  if (!pages.length) return null;
-  return pages.find((p) => CONV_RE.test(p.url)) || pages[0];
+async function listPages(port) {
+  const all = await httpJson(port, '/json/list');
+  return all.filter((p) => p.type === 'page' && p.webSocketDebuggerUrl);
 }
 
 class Cdp {
@@ -164,8 +167,19 @@ class Cdp {
 
 // ------------------------------------------------------------------ data side
 
-let lastSignature = '';
-let lastPayload = null;
+// Cache keyed by conversation, not globally: with two windows open, alternating
+// between them must not re-parse a trajectory on every switch.
+const payloadCache = new Map(); // conversationId -> { signature, payload }
+
+let floorHint = null;
+
+function learnFloorOnce() {
+  try {
+    floorHint = learnFloor();
+  } catch {
+    floorHint = null;
+  }
+}
 
 // `conversationId` comes from the page URL. There is deliberately NO fallback to
 // "the most recently active conversation": on a new-conversation screen that
@@ -181,7 +195,9 @@ function payloadFor(conversationId) {
   } catch {
     return null;
   }
-  if (signature === lastSignature && lastPayload) return lastPayload;
+
+  const cached = payloadCache.get(conversationId);
+  if (cached && cached.signature === signature) return cached.payload;
 
   const traj = readTrajectory(conversationId);
   if (!traj || traj.samples.length === 0) return null;
@@ -194,8 +210,7 @@ function payloadFor(conversationId) {
     floorHint = observed;
   }
 
-  lastSignature = signature;
-  lastPayload = {
+  const payload = {
     title: conversationTitle(conversationId),
     model: breakdown.model,
     limit: breakdown.limit,
@@ -210,17 +225,10 @@ function payloadFor(conversationId) {
     generations: traj.samples.length,
     updatedAt: Date.now(),
   };
-  return lastPayload;
-}
-
-let floorHint = null;
-
-function learnFloorOnce() {
-  try {
-    floorHint = learnFloor();
-  } catch {
-    floorHint = null;
-  }
+  payloadCache.set(conversationId, { signature, payload });
+  // Bounded, like every other per-conversation cache here.
+  if (payloadCache.size > 50) payloadCache.delete(payloadCache.keys().next().value);
+  return payload;
 }
 
 // ---------------------------------------------------------------------- loop
@@ -231,8 +239,7 @@ const READ_CONV = `(() => { const m = location.pathname.match(/\\/c\\/([0-9a-fA-
 const UI_VERSION = (/const VERSION = '([^']+)'/.exec(UI_SRC) || [])[1] || 'none';
 const HAS_UI = `!!(window.__agcm && window.__agcm.version === ${JSON.stringify(UI_VERSION)})`;
 
-// Repeats every few seconds while Antigravity starts up, so failures are
-// reported once per distinct reason instead of spamming.
+// Repeats on connection failures, once per distinct reason instead of spamming.
 let lastAttachNote = '';
 function noteAttach(message) {
   if (message === lastAttachNote) return;
@@ -240,22 +247,94 @@ function noteAttach(message) {
   if (message) console.error(message);
 }
 
-async function attach() {
-  const port = discoverPort();
-  if (!port) {
-    noteAttach('等待 Antigravity 暴露调试端口（DevToolsActivePort）…');
-    return null;
-  }
-  const page = await findConversationPage(port);
-  if (!page) {
-    noteAttach(`端口 ${port} 上暂时没有可用页面，等待中…`);
-    return null;
-  }
-  const cdp = await Cdp.connect(page.webSocketDebuggerUrl);
-  return { cdp, pageId: page.id, port };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// One session per open Antigravity window. Every field the update loop mutated
+// before lives here now, so two windows never share or clobber each other's
+// state.
+function makeSession(page, port) {
+  return {
+    pageId: page.id,
+    url: page.url,
+    port,
+    cdp: null,
+    uiReady: false,
+    lastPushedKey: '',
+    lastBeatAt: 0,
+    sayTimer: null,
+  };
 }
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function dropSession(sessions, session, reason) {
+  if (session.sayTimer) clearTimeout(session.sayTimer);
+  if (session.cdp) session.cdp.close();
+  sessions.delete(session.pageId);
+  if (reason) console.error(`会话页面 ${session.pageId.slice(0, 8)} 已断开（${reason}），其余页面不受影响。`);
+}
+
+// The per-page update, formerly the whole loop body. Throws to have the caller
+// tear down exactly this session.
+async function tickSession(session, removeOnly) {
+  const { cdp } = session;
+
+  if (removeOnly) {
+    await cdp.eval('window.__agcm && window.__agcm.remove()');
+    return;
+  }
+
+  if (!session.uiReady) {
+    await cdp.eval(UI_SRC);
+    session.uiReady = true;
+    session.lastPushedKey = ''; // a fresh UI has nothing rendered yet
+  } else if (!(await cdp.eval(HAS_UI))) {
+    // The page reloaded (Antigravity restart, Ctrl+R): the old element and its
+    // state are gone, so re-inject and force the next push.
+    await cdp.eval(UI_SRC);
+    session.lastPushedKey = '';
+  }
+
+  const convId = await cdp.eval(READ_CONV);
+  const payload = payloadFor(convId);
+  const key = payload ? `${convId}:${payload.updatedAt}` : `none:${convId || ''}`;
+
+  // Only touch the DOM when the conversation or the numbers actually changed;
+  // this runs several times a second and needless writes make the host app
+  // re-layout for no reason.
+  if (key !== session.lastPushedKey) {
+    session.lastPushedKey = key;
+    if (payload) {
+      await cdp.eval(`window.__agcm.set(${JSON.stringify(payload)})`);
+    } else {
+      // New-conversation screen, or a conversation with nothing in it yet.
+      await cdp.eval('window.__agcm.hide()');
+    }
+    session.lastBeatAt = Date.now();
+  } else if (payload && Date.now() - session.lastBeatAt > 1000) {
+    // Nothing changed. Say so anyway, once a second, so the panel can tell
+    // "idle" apart from "the injector died and the numbers are frozen".
+    session.lastBeatAt = Date.now();
+    await cdp.eval('window.__agcm.beat()');
+  }
+
+  // Encouragement rides its own channel rather than the data payload: it arrives
+  // asynchronously (a provider call), and folding it into `set()` would mean
+  // re-pushing identical numbers just to carry a sentence.
+  if (payload) {
+    phrases.pick(convId, payload);
+    const phrase = phrases.take(convId);
+    if (phrase) {
+      await cdp.eval(`window.__agcm.say(${JSON.stringify(phrase)})`);
+      // The revert is scheduled here, not in the page: Chromium throttles timers
+      // in hidden pages, so a page-side timer can leave a sentence covering the
+      // numbers for a minute or more.
+      if (session.sayTimer) clearTimeout(session.sayTimer);
+      session.sayTimer = setTimeout(() => {
+        session.sayTimer = null;
+        session.cdp?.eval('window.__agcm.sayEnd()').catch(() => {});
+      }, SAY_HOLD_MS);
+    }
+  }
+}
 
 async function run() {
   const removeOnly = process.argv.includes('--remove');
@@ -266,118 +345,81 @@ async function run() {
   const idleExitMin = Number(process.env.AGCM_IDLE_EXIT_MIN || 30);
   const idleExitMs = (Number.isFinite(idleExitMin) ? idleExitMin : 30) * 60_000;
 
-  let session = null;
-  let uiReady = false;
+  const sessions = new Map(); // pageId -> session
+  let port = null;
   let absentSince = null;
-  let lastPushedKey = '';
-  let lastBeatAt = 0;
-  let sayTimer = null;
 
-  const teardown = async () => {
-    if (sayTimer) clearTimeout(sayTimer);
-    sayTimer = null;
-    if (session) session.cdp.close();
-    session = null;
-    uiReady = false;
+  const teardownAll = () => {
+    for (const session of [...sessions.values()]) dropSession(sessions, session);
   };
 
   for (;;) {
-    if (!session) {
+    if (!port) port = discoverPort();
+    let pages = null;
+    if (port) {
+      try {
+        pages = await listPages(port);
+      } catch {
+        pages = null;
+      }
+    }
+
+    if (!pages || pages.length === 0) {
       // "Antigravity is up" means "its debug endpoint answers", not "a process
       // named Antigravity.exe exists" -- the sidecar host keeps that name alive
       // forever, which made a process-based check always true and silently
       // disabled the idle exit below.
-      const attached = await attach();
-      if (!attached) {
-        if (removeOnly) {
-          console.log('Antigravity 未运行，无需移除。');
-          return;
-        }
-        absentSince ??= Date.now();
-        if (idleExitMs > 0 && Date.now() - absentSince > idleExitMs) {
-          const mins = idleExitMs / 60000;
-          const label = mins >= 1 ? `${Math.round(mins)} 分钟` : `${Math.round(idleExitMs / 1000)} 秒`;
-          console.log(`Antigravity 已停用超过 ${label}，退出。`);
-          return;
-        }
-        await sleep(RECONNECT_MS);
-        continue;
-      }
-      session = attached;
-      absentSince = null;
-      lastAttachNote = '';
-      console.log(`已连接 Antigravity（端口 ${session.port}）`);
-    }
-
-    try {
-
+      if (sessions.size) teardownAll();
+      if (port) port = null; // the app may have restarted on a new port
       if (removeOnly) {
-        await session.cdp.eval('window.__agcm && window.__agcm.remove()');
-        console.log('已移除嵌入的上下文面板。');
-        teardown();
+        console.log('Antigravity 未运行，无需移除。');
         return;
       }
-
-      if (!uiReady) {
-        await session.cdp.eval(UI_SRC);
-        uiReady = true;
-        lastPushedKey = '';   // a fresh UI has nothing rendered yet
-      } else if (!(await session.cdp.eval(HAS_UI))) {
-        // The page reloaded (Antigravity restart, Ctrl+R): the old element and
-        // its state are gone, so re-inject and force the next push.
-        await session.cdp.eval(UI_SRC);
-        lastPushedKey = '';
+      absentSince ??= Date.now();
+      if (idleExitMs > 0 && Date.now() - absentSince > idleExitMs) {
+        const mins = idleExitMs / 60000;
+        const label = mins >= 1 ? `${Math.round(mins)} 分钟` : `${Math.round(idleExitMs / 1000)} 秒`;
+        console.log(`Antigravity 已停用超过 ${label}，退出。`);
+        return;
       }
-
-      const convId = await session.cdp.eval(READ_CONV);
-      const payload = payloadFor(convId);
-      const key = payload ? `${convId}:${payload.updatedAt}` : `none:${convId || ''}`;
-
-      // Only touch the DOM when the conversation or the numbers actually changed;
-      // this runs several times a second and needless writes make the host app
-      // re-layout for no reason.
-      if (key !== lastPushedKey) {
-        lastPushedKey = key;
-        if (payload) {
-          await session.cdp.eval(`window.__agcm.set(${JSON.stringify(payload)})`);
-        } else {
-          // New-conversation screen, or a conversation with nothing in it yet.
-          await session.cdp.eval('window.__agcm.hide()');
-        }
-        lastBeatAt = Date.now();
-      } else if (payload && Date.now() - lastBeatAt > 1000) {
-        // Nothing changed. Say so anyway, once a second, so the panel can tell
-        // "idle" apart from "the injector died and the numbers are frozen".
-        lastBeatAt = Date.now();
-        await session.cdp.eval('window.__agcm.beat()');
-      }
-
-      // Encouragement rides its own channel rather than the data payload: it
-      // arrives asynchronously (a provider call), and folding it into `set()`
-      // would mean re-pushing identical numbers just to carry a sentence.
-      if (payload) {
-        phrases.pick(convId, payload);
-        const phrase = phrases.take(convId);
-        if (phrase) {
-          await session.cdp.eval(`window.__agcm.say(${JSON.stringify(phrase)})`);
-          // The revert is scheduled here, not in the page: Chromium throttles
-          // timers in hidden pages, so a page-side timer can leave a sentence
-          // covering the numbers for a minute or more.
-          if (sayTimer) clearTimeout(sayTimer);
-          sayTimer = setTimeout(() => {
-            sayTimer = null;
-            session?.cdp.eval('window.__agcm.sayEnd()').catch(() => {});
-          }, SAY_HOLD_MS);
-        }
-      }
-    } catch (err) {
-      console.error('注入中断，重试中：' + err.message);
-      await teardown();
-      await new Promise((r) => setTimeout(r, RECONNECT_MS));
+      noteAttach('等待 Antigravity 暴露调试端口（DevToolsActivePort）…');
+      await sleep(RECONNECT_MS);
       continue;
     }
+    absentSince = null;
+    lastAttachNote = '';
 
-    await new Promise((r) => setTimeout(r, POLL_MS));
+    // Reconcile: connect to new pages, drop sessions whose page is gone.
+    for (const page of pages) {
+      if (sessions.has(page.id)) continue;
+      try {
+        const session = makeSession(page, port);
+        session.cdp = await Cdp.connect(page.webSocketDebuggerUrl);
+        sessions.set(page.id, session);
+        console.log(`已连接 Antigravity（端口 ${port}，页面 ${page.id.slice(0, 8)}，共 ${sessions.size} 个）`);
+      } catch (err) {
+        noteAttach(`连接页面失败，重试中：${err.message}`);
+      }
+    }
+    for (const session of [...sessions.values()]) {
+      if (!pages.some((p) => p.id === session.pageId)) dropSession(sessions, session);
+    }
+
+    if (removeOnly && sessions.size === 0) {
+      console.log('已移除嵌入的上下文面板。');
+      return;
+    }
+
+    // Update every session; one broken page is torn down alone.
+    for (const session of [...sessions.values()]) {
+      try {
+        await tickSession(session, removeOnly);
+      } catch (err) {
+        dropSession(sessions, session, err.message);
+      }
+    }
+
+    await sleep(POLL_MS);
   }
 }
 

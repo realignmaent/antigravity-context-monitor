@@ -313,6 +313,7 @@ module.exports = {
   findActiveConversation,
   readTrajectory,
   readGenerationStats,
+  limitFromMeta,
   learnFloor,
   brainAttachments,
   trajectoryPath,

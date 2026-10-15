@@ -8,6 +8,7 @@
     "inject": "node inject.js",
     "remove": "node inject.js --remove",
     "check": "node src/cli.js",
+    "test": "node --test",
     "selfcheck": "node scripts/check-invariants.js"
   },
   "engines": {

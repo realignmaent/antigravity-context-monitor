@@ -107,6 +107,9 @@ function listModels() {
         keySource: model.apiKey !== undefined ? model.apiKey : spec.apiKey,
         authHeader: model.authHeader !== undefined ? model.authHeader : spec.authHeader,
         maxTokens: model.maxTokens,
+        // Only sent when configured - reasoning models often reject a lowered
+        // temperature, so the provider default stays the safe default.
+        temperature: model.temperature !== undefined ? model.temperature : spec.temperature,
         headers: { ...(spec.headers || {}), ...(model.headers || {}) },
       });
     }
@@ -136,18 +139,19 @@ function buildRequest(model, apiKey, system, prompt, maxTokens) {
 
   if (model.api === 'openai-completions') {
     if (apiKey) headers.authorization = `Bearer ${apiKey}`;
+    const body = {
+      model: model.id,
+      max_tokens: maxTokens,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: prompt },
+      ],
+    };
+    if (model.temperature !== undefined) body.temperature = model.temperature;
     return {
       url: joinUrl(model.baseUrl, '/chat/completions'),
       headers,
-      body: {
-        model: model.id,
-        max_tokens: maxTokens,
-        temperature: 1,
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: prompt },
-        ],
-      },
+      body,
       extract: (json) => json?.choices?.[0]?.message?.content,
     };
   }
@@ -162,6 +166,7 @@ function buildRequest(model, apiKey, system, prompt, maxTokens) {
         model: model.id,
         max_tokens: maxTokens,
         system,
+        ...(model.temperature !== undefined ? { temperature: model.temperature } : {}),
         messages: [{ role: 'user', content: prompt }],
       },
       extract: (json) => json?.content?.[0]?.text,
@@ -176,7 +181,10 @@ function buildRequest(model, apiKey, system, prompt, maxTokens) {
       body: {
         systemInstruction: { parts: [{ text: system }] },
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: { maxOutputTokens: maxTokens, temperature: 1 },
+        generationConfig: {
+          maxOutputTokens: maxTokens,
+          ...(model.temperature !== undefined ? { temperature: model.temperature } : {}),
+        },
       },
       extract: (json) => json?.candidates?.[0]?.content?.parts?.[0]?.text,
     };

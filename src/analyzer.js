@@ -88,8 +88,10 @@ function splitSections(prompt) {
   // own prompt) used to be cut off at the mention, collapsing Messages to nothing.
   let bodyEnd = header ? prompt.indexOf(header, bodyStart) : -1;
   if (bodyEnd === -1) {
-    const last = prompt.lastIndexOf('<identity>');
-    bodyEnd = last > bodyStart ? last : prompt.length;
+    // No verbatim header repeat (the normal case in every blob seen so far):
+    // the body simply runs to the end. Truncating at a bare `<identity>` mention
+    // would be the old bug again.
+    bodyEnd = prompt.length;
   }
   const body = prompt.slice(bodyStart, bodyEnd);
 
